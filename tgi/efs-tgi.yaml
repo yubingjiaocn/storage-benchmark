@@ -1,0 +1,75 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: efs-pv
+spec:
+  capacity:
+    storage: 100Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  storageClassName: efs-sc
+  persistentVolumeReclaimPolicy: Retain
+  csi:
+    driver: efs.csi.aws.com
+    volumeHandle: fs-0c558636af8a083d5
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: efs-claim
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: efs-sc
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tgi-efs
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tgi-efs
+      test: tgi
+  template:
+    metadata:
+      labels:
+        app: tgi-efs
+        test: tgi
+    spec:
+      nodeSelector:
+        launch: Karpenter
+        os: Bottlerocket
+      containers:
+      - name: text-generation-inference
+        image: ghcr.io/huggingface/text-generation-inference:2.1.0
+        args: ["--model-id", "/data/Llama-2-7b-chat-hf"]
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: model-data
+          mountPath: /data
+        resources:
+          requests:
+            nvidia.com/gpu: 1
+          limits:
+            nvidia.com/gpu: 1
+      volumes:
+      - name: model-data
+        persistentVolumeClaim:
+          claimName: efs-claim
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: test
+                operator: In
+                values:
+                - tgi
+            topologyKey: kubernetes.io/hostname

@@ -1,0 +1,87 @@
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotContent
+metadata:
+  name: llama2-snapshot-content
+spec:
+  volumeSnapshotRef:
+    kind: VolumeSnapshot
+    name: llama2-snapshot
+    namespace: default
+  source:
+    snapshotHandle: snap-0ba89103cc0b4cb77
+  driver: ebs.csi.aws.com
+  deletionPolicy: Delete
+  volumeSnapshotClassName: csi-aws-vsc
+---
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata:
+  name: llama2-snapshot
+  namespace: default
+spec:
+  volumeSnapshotClassName: csi-aws-vsc
+  source:
+    volumeSnapshotContentName: llama2-snapshot-content
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ebs-claim
+spec:
+  volumeMode: Block
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ebs-sc
+  resources:
+    requests:
+      storage: 100Gi
+  dataSource:
+    name: llama2-snapshot
+    kind: VolumeSnapshot
+    apiGroup: snapshot.storage.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tgi-ebs
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tgi-ebs
+      test: tgi
+  template:
+    metadata:
+      labels:
+        app: tgi-ebs
+        test: tgi
+    spec:
+      nodeSelector:
+        launch: Karpenter
+        os: AL2
+      containers:
+      - name: text-generation-inference
+        image: ghcr.io/huggingface/text-generation-inference:2.1.0
+        args: ["--model-id", "/data/Llama-2-7b-chat-hf"]
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: model-data
+          mountPath: /data
+        resources:
+          requests:
+            nvidia.com/gpu: 1
+      volumes:
+      - name: model-data
+        persistentVolumeClaim:
+          claimName: ebs-claim
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: test
+                operator: In
+                values:
+                - tgi
+            topologyKey: kubernetes.io/hostname
